@@ -4,15 +4,18 @@ import cors from 'cors';
 const app = express();
 
 // CORS: allow multiple origins (comma-separated in FRONTEND_URL)
-// e.g. FRONTEND_URL=https://localhost:5173,https://192.168.100.7:5173,http://localhost:5173,http://192.168.100.7:5173
+// Local: FRONTEND_URL=http://localhost:5173
+// Production: FRONTEND_URL=https://hms-frontend1.vercel.app
 const frontendUrls = (process.env.FRONTEND_URL || 'http://localhost:5173')
   .split(',')
-  .map((u) => u.trim())
+  .map((u) => u.trim().replace(/\/$/, ''))
   .filter(Boolean);
 app.use(cors({
   origin: frontendUrls,
   credentials: true,
   optionsSuccessStatus: 204,
+  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 if (process.env.NODE_ENV !== 'test') {
   console.log('CORS allowed origins:', frontendUrls);
