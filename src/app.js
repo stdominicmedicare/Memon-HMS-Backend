@@ -3,13 +3,19 @@ import cors from 'cors';
 
 const app = express();
 
-// CORS: allow multiple origins (comma-separated in FRONTEND_URL)
-// Local: FRONTEND_URL=http://localhost:5173
-// Production: FRONTEND_URL=https://hms-frontend1.vercel.app
-const frontendUrls = (process.env.FRONTEND_URL || 'http://localhost:5173')
+// CORS: allow multiple origins (comma-separated in FRONTEND_URL).
+// In production we always allow the Vercel frontend so it works even if FRONTEND_URL is unset on Railway.
+const PRODUCTION_FRONTEND = 'https://hms-frontend1.vercel.app';
+const fromEnv = (process.env.FRONTEND_URL || '')
   .split(',')
   .map((u) => u.trim().replace(/\/$/, ''))
   .filter(Boolean);
+const defaultOrigin = process.env.NODE_ENV === 'production' ? PRODUCTION_FRONTEND : 'http://localhost:5173';
+const frontendUrls = fromEnv.length ? fromEnv : [defaultOrigin];
+if (process.env.NODE_ENV === 'production' && !frontendUrls.includes(PRODUCTION_FRONTEND)) {
+  frontendUrls.push(PRODUCTION_FRONTEND);
+}
+
 app.use(cors({
   origin: frontendUrls,
   credentials: true,
