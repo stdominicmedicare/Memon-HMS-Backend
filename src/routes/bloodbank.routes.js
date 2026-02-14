@@ -27,6 +27,11 @@ import {
   disposeUnit,
   getDisposalLogs,
   getBloodAvailability,
+  getDonationRequests as getBloodDonationRequests,
+  createDonationRequest,
+  updateDonationRequest,
+  getDonationRequestPledges,
+  completeVolunteerDonation,
 } from '../controllers/bloodbank.controller.js';
 
 const router = Router();
@@ -58,5 +63,11 @@ router.post('/transfusion', recordTransfusion);
 router.get('/transfusion-logs', getTransfusionLogs);
 router.post('/units/:id/dispose', disposeUnit);
 router.get('/disposal-logs', getDisposalLogs);
+
+router.get('/donation-requests', getBloodDonationRequests);
+router.post('/donation-requests', createDonationRequest);
+router.patch('/donation-requests/:id', updateDonationRequest);
+router.get('/donation-requests/:id/pledges', getDonationRequestPledges);
+router.patch('/donation-pledges/:pledgeId/complete', completeVolunteerDonation);
 
 export default router;

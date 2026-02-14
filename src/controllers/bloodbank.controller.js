@@ -475,3 +475,127 @@ export async function getBloodAvailability(req, res) {
     res.status(500).json({ error: err.message });
   }
 }
+
+// ——— Blood donation requests (for volunteers) ———
+
+/** List blood donation requests (open/closed). */
+export async function getDonationRequests(req, res) {
+  try {
+    const { status } = req.query;
+    let q = supabase
+      .from('blood_donation_requests')
+      .select('id, blood_group, quantity_required, location, urgency, status, created_by, created_at, updated_at')
+      .order('created_at', { ascending: false });
+    if (status) q = q.eq('status', status);
+    const { data, error } = await q;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/** Create blood donation request. */
+export async function createDonationRequest(req, res) {
+  try {
+    const userId = req.user?.id;
+    const { blood_group, quantity_required, location, urgency } = req.body;
+    if (!blood_group || !BLOOD_GROUPS.includes(blood_group)) {
+      return res.status(400).json({ error: 'Valid blood_group is required' });
+    }
+    const qty = Math.max(1, parseInt(quantity_required, 10) || 1);
+    const urg = ['High', 'Medium', 'Low'].includes(urgency) ? urgency : 'Medium';
+    const { data, error } = await supabase
+      .from('blood_donation_requests')
+      .insert({
+        blood_group,
+        quantity_required: qty,
+        location: location != null ? String(location).trim() : null,
+        urgency: urg,
+        status: 'open',
+        created_by: userId,
+        updated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/** Update blood donation request (e.g. close). */
+export async function updateDonationRequest(req, res) {
+  try {
+    const { id } = req.params;
+    const { status, location, urgency } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (status === 'open' || status === 'closed') updates.status = status;
+    if (location !== undefined) updates.location = String(location).trim() || null;
+    if (urgency !== undefined && ['High', 'Medium', 'Low'].includes(urgency)) updates.urgency = urgency;
+    const { data, error } = await supabase
+      .from('blood_donation_requests')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Request not found' });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/** List pledges (volunteer_donations) for a donation request. */
+export async function getDonationRequestPledges(req, res) {
+  try {
+    const { id } = req.params;
+    const { data: reqRow } = await supabase.from('blood_donation_requests').select('id').eq('id', id).single();
+    if (!reqRow) return res.status(404).json({ error: 'Request not found' });
+    const { data: pledges, error } = await supabase
+      .from('volunteer_donations')
+      .select('id, volunteer_id, status, accepted_at, completed_at, notes, created_at')
+      .eq('donation_request_id', id)
+      .order('accepted_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    const volunteerIds = [...new Set((pledges || []).map((p) => p.volunteer_id))];
+    const { data: profiles } = volunteerIds.length
+      ? await supabase.from('profiles').select('id, full_name, email, phone').in('id', volunteerIds)
+      : { data: [] };
+    const profileMap = Object.fromEntries((profiles || []).map((p) => [p.id, p]));
+    const list = (pledges || []).map((p) => ({
+      ...p,
+      volunteer: profileMap[p.volunteer_id] || null,
+    }));
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/** Mark a volunteer donation (pledge) as completed. */
+export async function completeVolunteerDonation(req, res) {
+  try {
+    const { pledgeId } = req.params;
+    const { notes } = req.body || {};
+    const { data, error } = await supabase
+      .from('volunteer_donations')
+      .update({
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        notes: notes != null ? String(notes).trim() : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', pledgeId)
+      .eq('status', 'pending')
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Pledge not found or already completed' });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}

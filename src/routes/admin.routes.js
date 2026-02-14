@@ -19,6 +19,9 @@ import {
   deleteDoctor,
   getDoctorStatistics,
   getDashboardStats,
+  getVolunteers,
+  createVolunteer,
+  updateVolunteer,
 } from '../controllers/admin.controller.js';
 import {
   getAmbulances,
@@ -73,5 +76,9 @@ router.post('/icu-beds', createIcuBed);
 router.patch('/icu-beds/:id', updateIcuBed);
 router.delete('/icu-beds/:id', deleteIcuBed);
 router.get('/icu-analytics', getIcuAnalytics);
+
+router.get('/volunteers', getVolunteers);
+router.post('/volunteers', createVolunteer);
+router.patch('/volunteers/:id', updateVolunteer);
 
 export default router;

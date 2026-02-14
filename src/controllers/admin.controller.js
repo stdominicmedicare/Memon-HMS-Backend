@@ -423,3 +423,137 @@ export async function getDashboardStats(req, res) {
     res.status(500).json({ error: err.message });
   }
 }
+
+// ——— Volunteer Management ———
+
+const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'];
+
+export async function getVolunteers(req, res) {
+  try {
+    const { data: profiles, error: pErr } = await supabase
+      .from('profiles')
+      .select('id, email, full_name, phone, role, is_active, created_at')
+      .eq('role', 'Volunteer')
+      .order('full_name');
+    if (pErr) return res.status(500).json({ error: pErr.message });
+    const userIds = (profiles || []).map((p) => p.id);
+    const { data: vpList } = userIds.length
+      ? await supabase.from('volunteer_profiles').select('user_id, blood_group, is_available').in('user_id', userIds)
+      : { data: [] };
+    const vpMap = Object.fromEntries((vpList || []).map((v) => [v.user_id, v]));
+    const list = (profiles || []).map((p) => ({
+      ...p,
+      blood_group: vpMap[p.id]?.blood_group ?? null,
+      is_available: vpMap[p.id]?.is_available ?? false,
+    }));
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+export async function createVolunteer(req, res) {
+  try {
+    const adminId = req.user.id;
+    const { email, password, full_name, phone, blood_group } = req.body;
+    if (!email || !password || !blood_group) {
+      return res.status(400).json({ error: 'Email, password, and blood_group are required' });
+    }
+    if (!BLOOD_GROUPS.includes(blood_group)) {
+      return res.status(400).json({ error: 'Invalid blood_group' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: full_name || email, role: 'Volunteer' },
+    });
+    if (authError) return res.status(400).json({ error: authError.message });
+
+    await supabase
+      .from('profiles')
+      .update({
+        full_name: full_name || email,
+        phone: phone != null ? String(phone).trim() : null,
+        role: 'Volunteer',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', authData.user.id);
+
+    const { error: vpErr } = await supabase.from('volunteer_profiles').insert({
+      user_id: authData.user.id,
+      blood_group,
+      is_available: false,
+      created_by: adminId,
+      updated_at: new Date().toISOString(),
+    });
+    if (vpErr) return res.status(500).json({ error: 'Volunteer profile create failed: ' + vpErr.message });
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('id, email, full_name, phone, role, is_active, created_at')
+      .eq('id', authData.user.id)
+      .single();
+    res.status(201).json({
+      ...profile,
+      blood_group,
+      is_available: false,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+export async function updateVolunteer(req, res) {
+  try {
+    const { id } = req.params;
+    const { full_name, phone, email, blood_group, is_active } = req.body;
+
+    const { data: existing } = await supabase.from('profiles').select('id, role').eq('id', id).single();
+    if (!existing) return res.status(404).json({ error: 'Volunteer not found' });
+    if (existing.role !== 'Volunteer') return res.status(400).json({ error: 'User is not a volunteer' });
+
+    if (email !== undefined) {
+      const { error: authError } = await supabase.auth.admin.updateUserById(id, { email });
+      if (authError) return res.status(400).json({ error: authError.message });
+    }
+
+    const profileUpdates = { updated_at: new Date().toISOString() };
+    if (full_name !== undefined) profileUpdates.full_name = full_name;
+    if (phone !== undefined) profileUpdates.phone = phone;
+    if (typeof is_active === 'boolean') profileUpdates.is_active = is_active;
+    if (Object.keys(profileUpdates).length > 1) {
+      await supabase.from('profiles').update(profileUpdates).eq('id', id);
+    }
+
+    if (blood_group !== undefined) {
+      if (!BLOOD_GROUPS.includes(blood_group)) return res.status(400).json({ error: 'Invalid blood_group' });
+      const { data: existingVp } = await supabase.from('volunteer_profiles').select('user_id').eq('user_id', id).maybeSingle();
+      if (existingVp) {
+        const { error: vpErr } = await supabase
+          .from('volunteer_profiles')
+          .update({ blood_group, updated_at: new Date().toISOString() })
+          .eq('user_id', id);
+        if (vpErr) return res.status(500).json({ error: vpErr.message });
+      } else {
+        const { error: insErr } = await supabase.from('volunteer_profiles').insert({
+          user_id: id,
+          blood_group,
+          is_available: false,
+          created_by: req.user.id,
+          updated_at: new Date().toISOString(),
+        });
+        if (insErr) return res.status(500).json({ error: insErr.message });
+      }
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('id, email, full_name, phone, role, is_active').eq('id', id).single();
+    const { data: vp } = await supabase.from('volunteer_profiles').select('blood_group, is_available').eq('user_id', id).maybeSingle();
+    res.json({ ...profile, blood_group: vp?.blood_group ?? null, is_available: vp?.is_available ?? false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
