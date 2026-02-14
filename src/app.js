@@ -49,6 +49,8 @@ import ambulanceRoutes from './routes/ambulance.routes.js';
 import icuRoutes from './routes/icu.routes.js';
 import pharmacyRoutes from './routes/pharmacy.routes.js';
 import bloodbankRoutes from './routes/bloodbank.routes.js';
+import geoRoutes from './routes/geo.routes.js';
+import trackingRoutes from './routes/tracking.routes.js';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
@@ -58,5 +60,7 @@ app.use('/api/ambulance', ambulanceRoutes);
 app.use('/api/icu', icuRoutes);
 app.use('/api/pharmacy', pharmacyRoutes);
 app.use('/api/bloodbank', bloodbankRoutes);
+app.use('/api', geoRoutes);
+app.use('/api/tracking', trackingRoutes);
 
 export default app;

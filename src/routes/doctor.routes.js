@@ -15,6 +15,7 @@ import {
   createEmergencyRequest,
   requestIcuAdmission,
   getMyIcuRequests,
+  getTransferTrips,
   getIcuMonitoringForPatient,
   createBloodRequest,
 } from '../controllers/doctor.controller.js';
@@ -34,6 +35,7 @@ router.post('/prescriptions', createPrescription);
 router.post('/emergency-request', createEmergencyRequest);
 router.post('/icu-admission-request', requestIcuAdmission);
 router.get('/icu-requests', getMyIcuRequests);
+router.get('/transfer-trips', getTransferTrips);
 router.get('/icu-monitoring', getIcuMonitoringForPatient);
 router.post('/blood-requests', createBloodRequest);
 

@@ -145,6 +145,98 @@ export async function getDashboardStats(req, res) {
   }
 }
 
+/** Default depot for ambulances without coordinates (patient map awareness). */
+const PATIENT_MAP_DEPOT = { lat: 40.7128, lng: -74.006 };
+
+function parseCurrentLocation(current_location) {
+  if (!current_location || typeof current_location !== 'string') return null;
+  const trimmed = current_location.trim();
+  let lat; let lng;
+  if (trimmed.startsWith('{')) {
+    try {
+      const o = JSON.parse(trimmed);
+      lat = typeof o.lat === 'number' ? o.lat : parseFloat(o.lat);
+      lng = typeof o.lng === 'number' ? o.lng : parseFloat(o.lng);
+    } catch {
+      return null;
+    }
+  } else {
+    const parts = trimmed.split(/[,;\s]+/);
+    if (parts.length >= 2) {
+      lat = parseFloat(parts[0]);
+      lng = parseFloat(parts[1]);
+    } else return null;
+  }
+  if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+  return { lat, lng };
+}
+
+/** Get ambulance availability for patient map: vehicle_number, status, lat, lng (no PII). */
+export async function getAmbulanceAvailability(req, res) {
+  try {
+    const { data: ambulances, error } = await supabase
+      .from('ambulances')
+      .select('id, vehicle_number, status, current_location')
+      .order('vehicle_number');
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const list = (ambulances || []).map((a) => {
+      const loc = parseCurrentLocation(a.current_location) || PATIENT_MAP_DEPOT;
+      return {
+        id: a.id,
+        vehicle_number: a.vehicle_number,
+        status: a.status,
+        lat: loc.lat,
+        lng: loc.lng,
+      };
+    });
+
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/** Get current patient's active trip (en_route, arrived, patient_picked, arrived_at_hospital) with driver and ambulance info. */
+export async function getActiveAmbulanceTrip(req, res) {
+  try {
+    const patientId = req.user.id;
+    const { data: trip, error: tripError } = await supabase
+      .from('ambulance_requests')
+      .select('id, from_address, to_address, priority, status, requested_at, assigned_driver_id, ambulance_id')
+      .eq('patient_id', patientId)
+      .in('status', ['en_route', 'arrived', 'patient_picked', 'arrived_at_hospital'])
+      .order('requested_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (tripError) return res.status(500).json({ error: tripError.message });
+    if (!trip) return res.json(null);
+
+    const driverId = trip.assigned_driver_id;
+    const ambulanceId = trip.ambulance_id;
+    let driver = null;
+    let ambulance = null;
+    if (driverId) {
+      const { data: p } = await supabase.from('profiles').select('id, full_name, phone').eq('id', driverId).single();
+      driver = p;
+    }
+    if (ambulanceId) {
+      const { data: a } = await supabase.from('ambulances').select('id, vehicle_number').eq('id', ambulanceId).single();
+      ambulance = a;
+    }
+
+    res.json({
+      ...trip,
+      driver: driver ? { id: driver.id, full_name: driver.full_name, phone: driver.phone } : null,
+      ambulance: ambulance ? { id: ambulance.id, vehicle_number: ambulance.vehicle_number } : null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
 /** Get current patient's ambulance requests. */
 export async function getAmbulanceRequests(req, res) {
   try {

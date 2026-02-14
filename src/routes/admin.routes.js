@@ -28,6 +28,7 @@ import {
   getAmbulanceRequests,
   assignAmbulanceRequest,
   getAmbulanceDrivers,
+  getFleetStatus,
 } from '../controllers/admin.ambulance.controller.js';
 import {
   getIcuBeds,
@@ -65,6 +66,7 @@ router.delete('/ambulances/:id', deleteAmbulance);
 router.get('/ambulance-requests', getAmbulanceRequests);
 router.patch('/ambulance-requests/:id/assign', assignAmbulanceRequest);
 router.get('/ambulance-drivers', getAmbulanceDrivers);
+router.get('/fleet-status', getFleetStatus);
 
 router.get('/icu-beds', getIcuBeds);
 router.post('/icu-beds', createIcuBed);

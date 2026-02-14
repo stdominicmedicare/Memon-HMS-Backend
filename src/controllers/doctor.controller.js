@@ -239,6 +239,47 @@ export async function requestIcuAdmission(req, res) {
   }
 }
 
+const ACTIVE_TRIP_STATUSES = ['en_route', 'arrived', 'patient_picked', 'arrived_at_hospital'];
+
+/** Get transfer trips: active ambulance trips for patients this doctor requested ICU admission for (for tracking). */
+export async function getTransferTrips(req, res) {
+  try {
+    const doctorId = req.user.id;
+    const { data: myRequests } = await supabase
+      .from('icu_admission_requests')
+      .select('id, patient_id, request_status, priority_level, request_notes, assigned_bed_id, created_at')
+      .eq('doctor_id', doctorId)
+      .order('created_at', { ascending: false });
+
+    if (!myRequests?.length) return res.json([]);
+
+    const patientIds = [...new Set(myRequests.map((r) => r.patient_id))];
+    const { data: trips } = await supabase
+      .from('ambulance_requests')
+      .select('id, patient_id, from_address, to_address, status, assigned_driver_id, ambulance_id, requested_at')
+      .in('patient_id', patientIds)
+      .in('status', ACTIVE_TRIP_STATUSES)
+      .order('requested_at', { ascending: false });
+
+    if (!trips?.length) return res.json([]);
+
+    const requestByPatient = {};
+    myRequests.forEach((r) => { requestByPatient[r.patient_id] = r; });
+    const patientIdsInTrip = [...new Set(trips.map((t) => t.patient_id))];
+    const { data: patients } = await supabase.from('profiles').select('id, full_name').in('id', patientIdsInTrip);
+    const patientMap = Object.fromEntries((patients || []).map((p) => [p.id, p]));
+
+    const list = trips.map((trip) => ({
+      ...trip,
+      patient: patientMap[trip.patient_id] || null,
+      icu_request: requestByPatient[trip.patient_id] || null,
+    }));
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
 /** List ICU admission requests created by this doctor (for View ICU Patient Progress). */
 export async function getMyIcuRequests(req, res) {
   try {

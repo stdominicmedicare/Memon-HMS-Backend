@@ -141,3 +141,88 @@ export async function getAmbulanceDrivers(req, res) {
     res.status(500).json({ error: err.message });
   }
 }
+
+const ACTIVE_TRIP_STATUSES = ['en_route', 'arrived', 'patient_picked', 'arrived_at_hospital'];
+
+/** Fleet view: all ambulances + active trips with driver, last_completed_at for map and modal. */
+export async function getFleetStatus(req, res) {
+  try {
+    const [ambulancesRes, tripsRes, completedRes] = await Promise.all([
+      supabase.from('ambulances').select('id, vehicle_number, status, ambulance_type, driver_id, current_location').order('vehicle_number'),
+      supabase
+        .from('ambulance_requests')
+        .select('id, ambulance_id, status, from_address, to_address, patient_id, assigned_driver_id, requested_at')
+        .in('status', ACTIVE_TRIP_STATUSES)
+        .order('requested_at', { ascending: false }),
+      supabase
+        .from('ambulance_requests')
+        .select('ambulance_id, completed_at')
+        .eq('status', 'completed')
+        .not('completed_at', 'is', null)
+        .order('completed_at', { ascending: false }),
+    ]);
+
+    const ambulances = ambulancesRes.data || [];
+    const trips = tripsRes.data || [];
+    const completedList = completedRes.data || [];
+
+    const lastCompletedByAmbulance = {};
+    completedList.forEach((r) => {
+      if (r.ambulance_id && !lastCompletedByAmbulance[r.ambulance_id]) {
+        lastCompletedByAmbulance[r.ambulance_id] = r.completed_at;
+      }
+    });
+
+    const driverIds = [
+      ...new Set([
+        ...trips.map((t) => t.assigned_driver_id).filter(Boolean),
+        ...ambulances.map((a) => a.driver_id).filter(Boolean),
+      ]),
+    ];
+    let driverMap = {};
+    if (driverIds.length > 0) {
+      const { data: drivers } = await supabase.from('profiles').select('id, full_name, phone').in('id', driverIds);
+      driverMap = Object.fromEntries((drivers || []).map((d) => [d.id, d]));
+    }
+
+    const patientIds = [...new Set(trips.map((t) => t.patient_id).filter(Boolean))];
+    const ambulanceIdsForTrips = [...new Set(trips.map((t) => t.ambulance_id).filter(Boolean))];
+    let patientMap = {};
+    let ambulanceMap = {};
+    if (patientIds.length > 0) {
+      const { data: patients } = await supabase.from('profiles').select('id, full_name').in('id', patientIds);
+      patientMap = Object.fromEntries((patients || []).map((p) => [p.id, p]));
+    }
+    if (ambulanceIdsForTrips.length > 0) {
+      const { data: ambs } = await supabase.from('ambulances').select('id, vehicle_number').in('id', ambulanceIdsForTrips);
+      ambulanceMap = Object.fromEntries((ambs || []).map((a) => [a.id, a]));
+    }
+
+    const activeTrips = trips.map((t) => ({
+      ...t,
+      patient: t.patient_id ? patientMap[t.patient_id] || null : null,
+      driver: t.assigned_driver_id ? driverMap[t.assigned_driver_id] || null : null,
+      ambulance: t.ambulance_id ? ambulanceMap[t.ambulance_id] || null : null,
+    }));
+
+    const ambulancesWithDetails = ambulances.map((a) => ({
+      ...a,
+      driver: a.driver_id ? driverMap[a.driver_id] || null : null,
+      last_completed_at: lastCompletedByAmbulance[a.id] || null,
+    }));
+
+    const stats = {
+      totalAmbulances: ambulances.length,
+      available: ambulances.filter((a) => a.status === 'Available').length,
+      onDuty: ambulances.filter((a) => a.status === 'On Duty').length,
+      activeTripsCount: activeTrips.length,
+      returning: ambulances.filter((a) => a.status === 'On Duty' && !trips.some((t) => t.ambulance_id === a.id)).length,
+      offline: ambulances.filter((a) => a.status === 'Offline').length,
+      maintenance: ambulances.filter((a) => a.status === 'Maintenance').length,
+    };
+
+    res.json({ ambulances: ambulancesWithDetails, activeTrips, stats });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}

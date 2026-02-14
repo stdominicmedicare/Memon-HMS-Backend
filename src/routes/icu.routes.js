@@ -12,6 +12,7 @@ import {
   rejectRequest,
   assignBed,
   getActivePatients,
+  getIncomingPatients,
   getMonitoringLogs,
   addMonitoringLog,
   dischargePatient,
@@ -33,6 +34,7 @@ router.post('/admission-requests/:id/approve', approveRequest);
 router.post('/admission-requests/:id/reject', rejectRequest);
 router.patch('/admission-requests/:id/assign-bed', assignBed);
 router.get('/active-patients', getActivePatients);
+router.get('/incoming-patients', getIncomingPatients);
 router.get('/monitoring', getMonitoringLogs);
 router.post('/monitoring', addMonitoringLog);
 router.patch('/admission-records/:id/discharge', dischargePatient);

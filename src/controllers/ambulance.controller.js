@@ -4,6 +4,99 @@
  */
 import { supabase } from '../config/supabase.js';
 
+const DRIVER_FLEET_DEPOT = { lat: 40.7128, lng: -74.006 };
+const ACTIVE_TRIP_STATUSES = ['en_route', 'arrived', 'patient_picked', 'arrived_at_hospital'];
+
+function parseCurrentLocation(current_location) {
+  if (!current_location || typeof current_location !== 'string') return null;
+  const trimmed = current_location.trim();
+  let lat; let lng;
+  if (trimmed.startsWith('{')) {
+    try {
+      const o = JSON.parse(trimmed);
+      lat = typeof o.lat === 'number' ? o.lat : parseFloat(o.lat);
+      lng = typeof o.lng === 'number' ? o.lng : parseFloat(o.lng);
+    } catch {
+      return null;
+    }
+  } else {
+    const parts = trimmed.split(/[,;\s]+/);
+    if (parts.length >= 2) {
+      lat = parseFloat(parts[0]);
+      lng = parseFloat(parts[1]);
+    } else return null;
+  }
+  if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+  return { lat, lng };
+}
+
+/** Fleet view for driver: all ambulances with position and status; driver's own ambulance id; trip info for popups. */
+export async function getDriverFleetView(req, res) {
+  try {
+    const driverId = req.user.id;
+
+    const { data: myAmbulance } = await supabase
+      .from('ambulances')
+      .select('id')
+      .eq('driver_id', driverId)
+      .maybeSingle();
+
+    const [ambulancesRes, tripsRes] = await Promise.all([
+      supabase.from('ambulances').select('id, vehicle_number, status, driver_id, current_location').order('vehicle_number'),
+      supabase
+        .from('ambulance_requests')
+        .select('id, ambulance_id, status, from_address, to_address')
+        .in('status', ACTIVE_TRIP_STATUSES),
+    ]);
+
+    const ambulances = ambulancesRes.data || [];
+    const trips = tripsRes.data || [];
+    const tripByAmbulanceId = {};
+    trips.forEach((t) => {
+      if (t.ambulance_id) tripByAmbulanceId[t.ambulance_id] = t;
+    });
+
+    const driverIds = [...new Set(ambulances.map((a) => a.driver_id).filter(Boolean))];
+    let driverMap = {};
+    if (driverIds.length > 0) {
+      const { data: drivers } = await supabase.from('profiles').select('id, full_name').in('id', driverIds);
+      driverMap = Object.fromEntries((drivers || []).map((d) => [d.id, d]));
+    }
+
+    const list = ambulances.map((a) => {
+      const loc = parseCurrentLocation(a.current_location) || DRIVER_FLEET_DEPOT;
+      const trip = tripByAmbulanceId[a.id] || null;
+      const driver = a.driver_id ? driverMap[a.driver_id] || null : null;
+      return {
+        id: a.id,
+        vehicle_number: a.vehicle_number,
+        status: a.status,
+        lat: loc.lat,
+        lng: loc.lng,
+        driver: driver ? { full_name: driver.full_name } : null,
+        trip: trip ? { from_address: trip.from_address, to_address: trip.to_address, status: trip.status } : null,
+      };
+    });
+
+    const stats = {
+      total: ambulances.length,
+      available: ambulances.filter((a) => a.status === 'Available').length,
+      onTrip: trips.length,
+      returning: ambulances.filter((a) => a.status === 'On Duty' && !tripByAmbulanceId[a.id]).length,
+      offline: ambulances.filter((a) => a.status === 'Offline').length,
+      maintenance: ambulances.filter((a) => a.status === 'Maintenance').length,
+    };
+
+    res.json({
+      myAmbulanceId: myAmbulance?.id ?? null,
+      ambulances: list,
+      stats,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
 /** Get dashboard for current driver: assigned ambulance, stats, trip requests. */
 export async function getDashboard(req, res) {
   try {
@@ -31,7 +124,7 @@ export async function getDashboard(req, res) {
       .from('ambulance_requests')
       .select('id, patient_id, from_address, to_address, priority, status, requested_at, notes')
       .eq('assigned_driver_id', driverId)
-      .in('status', ['assigned', 'en_route', 'arrived', 'patient_picked'])
+      .in('status', ['assigned', 'en_route', 'arrived', 'patient_picked', 'arrived_at_hospital'])
       .order('requested_at', { ascending: false });
 
     const { data: completedByMe } = await supabase
@@ -190,7 +283,7 @@ export async function rejectTrip(req, res) {
 
     if (!request) return res.status(404).json({ error: 'Request not found' });
     if (request.assigned_driver_id !== driverId) return res.status(403).json({ error: 'Not your trip' });
-    if (!['assigned', 'en_route', 'arrived', 'patient_picked'].includes(request.status)) {
+    if (!['assigned', 'en_route', 'arrived', 'patient_picked', 'arrived_at_hospital'].includes(request.status)) {
       return res.status(400).json({ error: 'Can only reject assigned or in-progress trips' });
     }
 
@@ -311,6 +404,36 @@ export async function patientPickedTrip(req, res) {
   }
 }
 
+/** Mark arrived at hospital (after patient picked, before complete). */
+export async function arrivedAtHospitalTrip(req, res) {
+  try {
+    const driverId = req.user.id;
+    const { id } = req.params;
+
+    const { data: request } = await supabase
+      .from('ambulance_requests')
+      .select('id, status, assigned_driver_id')
+      .eq('id', id)
+      .single();
+
+    if (!request) return res.status(404).json({ error: 'Request not found' });
+    if (request.assigned_driver_id !== driverId) return res.status(403).json({ error: 'Not your trip' });
+    if (request.status !== 'patient_picked') return res.status(400).json({ error: 'Mark patient picked first' });
+
+    const { data, error } = await supabase
+      .from('ambulance_requests')
+      .update({ status: 'arrived_at_hospital', updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
 /** Complete trip (with optional trip notes). */
 export async function completeTrip(req, res) {
   try {
@@ -326,7 +449,7 @@ export async function completeTrip(req, res) {
 
     if (!request) return res.status(404).json({ error: 'Request not found' });
     if (request.assigned_driver_id !== driverId) return res.status(403).json({ error: 'Not your trip' });
-    if (!['assigned', 'en_route', 'arrived', 'patient_picked'].includes(request.status)) return res.status(400).json({ error: 'Invalid status' });
+    if (!['assigned', 'en_route', 'arrived', 'patient_picked', 'arrived_at_hospital'].includes(request.status)) return res.status(400).json({ error: 'Invalid status' });
 
     const updates = { status: 'completed', completed_at: new Date().toISOString(), updated_at: new Date().toISOString() };
     if (trip_notes !== undefined) updates.trip_notes = String(trip_notes).trim() || null;

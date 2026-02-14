@@ -309,6 +309,71 @@ export async function assignBed(req, res) {
   }
 }
 
+const ACTIVE_TRIP_STATUSES = ['en_route', 'arrived', 'patient_picked', 'arrived_at_hospital'];
+
+/** Get incoming patients: approved ICU admission requests with an active ambulance trip (for live tracking). */
+export async function getIncomingPatients(req, res) {
+  try {
+    const { data: approvedRequests } = await supabase
+      .from('icu_admission_requests')
+      .select('id, patient_id, doctor_id, priority_level, request_notes, assigned_bed_id, created_at')
+      .eq('request_status', 'approved')
+      .order('created_at', { ascending: false });
+
+    if (!approvedRequests?.length) return res.json([]);
+
+    const patientIds = [...new Set(approvedRequests.map((r) => r.patient_id))];
+    const { data: trips } = await supabase
+      .from('ambulance_requests')
+      .select('id, patient_id, from_address, to_address, status, assigned_driver_id, ambulance_id, requested_at')
+      .in('patient_id', patientIds)
+      .in('status', ACTIVE_TRIP_STATUSES)
+      .order('requested_at', { ascending: false });
+
+    if (!trips?.length) return res.json([]);
+
+    const tripByPatient = {};
+    trips.forEach((t) => { tripByPatient[t.patient_id] = t; });
+    const requestByPatient = {};
+    approvedRequests.forEach((r) => { requestByPatient[r.patient_id] = r; });
+
+    const patientIdsInTrip = [...new Set(trips.map((t) => t.patient_id))];
+    const doctorIds = [...new Set(approvedRequests.map((r) => r.doctor_id).filter(Boolean))];
+    const driverIds = [...new Set(trips.map((t) => t.assigned_driver_id).filter(Boolean))];
+    const ambulanceIds = [...new Set(trips.map((t) => t.ambulance_id).filter(Boolean))];
+
+    const [patientsRes, doctorsRes, driversRes, ambulancesRes] = await Promise.all([
+      patientIdsInTrip.length ? supabase.from('profiles').select('id, full_name').in('id', patientIdsInTrip) : { data: [] },
+      doctorIds.length ? supabase.from('profiles').select('id, full_name').in('id', doctorIds) : { data: [] },
+      driverIds.length ? supabase.from('profiles').select('id, full_name, phone').in('id', driverIds) : { data: [] },
+      ambulanceIds.length ? supabase.from('ambulances').select('id, vehicle_number').in('id', ambulanceIds) : { data: [] },
+    ]);
+    const patientMap = Object.fromEntries((patientsRes.data || []).map((p) => [p.id, p]));
+    const doctorMap = Object.fromEntries((doctorsRes.data || []).map((d) => [d.id, d]));
+    const driverMap = Object.fromEntries((driversRes.data || []).map((d) => [d.id, d]));
+    const ambulanceMap = Object.fromEntries((ambulancesRes.data || []).map((a) => [a.id, a]));
+
+    const list = trips.map((trip) => {
+      const request = requestByPatient[trip.patient_id];
+      const patient = patientMap[trip.patient_id] || null;
+      const doctor = request ? doctorMap[request.doctor_id] || null : null;
+      const driver = trip.assigned_driver_id ? driverMap[trip.assigned_driver_id] || null : null;
+      const ambulance = trip.ambulance_id ? ambulanceMap[trip.ambulance_id] || null : null;
+      return {
+        ...trip,
+        patient,
+        doctor,
+        driver: driver ? { id: driver.id, full_name: driver.full_name, phone: driver.phone } : null,
+        ambulance: ambulance ? { id: ambulance.id, vehicle_number: ambulance.vehicle_number } : null,
+        icu_request: request ? { id: request.id, priority_level: request.priority_level, request_notes: request.request_notes, assigned_bed_id: request.assigned_bed_id } : null,
+      };
+    });
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
 /** Get active ICU patients (occupied beds + admission record) for monitoring list. */
 export async function getActivePatients(req, res) {
   try {

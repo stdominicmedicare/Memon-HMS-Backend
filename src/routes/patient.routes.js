@@ -11,6 +11,8 @@ import {
   getRecords,
   getPrescriptions,
   getDashboardStats,
+  getAmbulanceAvailability,
+  getActiveAmbulanceTrip,
   getAmbulanceRequests,
   createAmbulanceRequest,
   cancelAmbulanceRequest,
@@ -30,6 +32,8 @@ router.get('/appointments', getAppointments);
 router.post('/appointments', bookAppointment);
 router.get('/records', getRecords);
 router.get('/prescriptions', getPrescriptions);
+router.get('/ambulance-availability', getAmbulanceAvailability);
+router.get('/ambulance-requests/active', getActiveAmbulanceTrip);
 router.get('/ambulance-requests', getAmbulanceRequests);
 router.post('/ambulance-requests', createAmbulanceRequest);
 router.patch('/ambulance-requests/:id/cancel', cancelAmbulanceRequest);
