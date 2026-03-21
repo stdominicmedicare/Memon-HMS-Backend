@@ -31,7 +31,7 @@ app.use(express.json());
 // Health / API root
 app.get('/', (req, res) => {
   res.json({
-    message: 'Hospital Management System API',
+    message: 'MEMON COMMUNITY HOSPITAL API',
     status: 'ok',
     version: '0.0.1',
   });

@@ -1,4 +1,4 @@
-# Hospital Management System – Backend (Node.js + Express)
+# MEMON COMMUNITY HOSPITAL – Backend (Node.js + Express)
 
 REST API with RBAC, Supabase (DB + Auth JWT), and role-based routes.
 
