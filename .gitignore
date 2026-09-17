@@ -1,10 +1,56 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets
 .env
-node_modules
+.env.*
+!.env.example
+env.local
+*.pem
+*.key
+credentials.json
+service-account*.json
+
+# Logs & debug
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime / local
+pids/
+*.pid
+*.seed
+*.pid.lock
+.tmp/
+tmp/
+temp/
+.cache/
+
+# Test / coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# OS / editor
 .DS_Store
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-.env.development
-.env.test
-.env.production
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Optional local tooling
+.pdf-venv/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Build artifacts (if any)
+dist/
+build/

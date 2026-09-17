@@ -3,6 +3,7 @@
  * All operations require Pharmacy role (or Admin for some).
  */
 import { supabase } from '../config/supabase.js';
+import { writeAuditLog } from '../services/auditService.js';
 
 const EXPIRY_DAYS_THRESHOLD = 90;
 const DEFAULT_LOW_STOCK = 10;
@@ -94,6 +95,17 @@ export async function createMedicine(req, res) {
     };
     const { data, error } = await supabase.from('medicines').insert(payload).select().single();
     if (error) return res.status(500).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'medicine',
+      resourceId: data.id,
+      patientId: null,
+      after: data,
+      req,
+    });
     res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -120,6 +132,17 @@ export async function updateMedicine(req, res) {
     const { data, error } = await supabase.from('medicines').update(updates).eq('id', id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Medicine not found' });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'medicine',
+      resourceId: id,
+      patientId: null,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -132,6 +155,17 @@ export async function deleteMedicine(req, res) {
     const { id } = req.params;
     const { error } = await supabase.from('medicines').delete().eq('id', id);
     if (error) return res.status(500).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'delete',
+      resourceType: 'medicine',
+      resourceId: id,
+      patientId: null,
+      after: null,
+      req,
+    });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -233,6 +267,18 @@ export async function dispensePrescription(req, res) {
     if (dispErr) return res.status(500).json({ error: dispErr.message });
 
     await supabase.from('prescriptions').update({ status: 'dispensed', updated_at: new Date().toISOString() }).eq('id', id);
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'prescription',
+      resourceId: id,
+      patientId: rx.patient_id,
+      after: { ok: true, status: 'dispensed' },
+      before: { status: rx.status },
+      req,
+    });
     res.json({ ok: true, status: 'dispensed' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -253,6 +299,18 @@ export async function rejectPrescription(req, res) {
       .single();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Prescription not found or not pending' });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'prescription',
+      resourceId: id,
+      patientId: data.patient_id,
+      after: data,
+      metadata: reason != null ? { reason } : null,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -378,6 +436,17 @@ export async function createPurchaseOrder(req, res) {
       it.purchase_order_id = po.id;
       await supabase.from('purchase_order_items').insert(it);
     }
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'purchase_order',
+      resourceId: po.id,
+      patientId: null,
+      after: po,
+      req,
+    });
     res.status(201).json(po);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -410,6 +479,17 @@ export async function updatePurchaseOrder(req, res) {
         }
       }
     }
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'purchase_order',
+      resourceId: id,
+      patientId: null,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });

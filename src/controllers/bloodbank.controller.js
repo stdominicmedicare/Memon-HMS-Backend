@@ -3,6 +3,7 @@
  * All operations require BloodBank or Admin role (except request creation by Doctor/ICU and patient read).
  */
 import { supabase } from '../config/supabase.js';
+import { writeAuditLog } from '../services/auditService.js';
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'];
 const CRITICAL_THRESHOLD = 5;
@@ -77,6 +78,17 @@ export async function createDonor(req, res) {
     };
     const { data, error } = await supabase.from('donors').insert(payload).select().single();
     if (error) return res.status(500).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'donor',
+      resourceId: data.id,
+      patientId: null,
+      after: data,
+      req,
+    });
     res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -98,6 +110,17 @@ export async function updateDonor(req, res) {
     });
     const { data, error } = await supabase.from('donors').update(updates).eq('id', id).select().single();
     if (error) return res.status(500).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'donor',
+      resourceId: id,
+      patientId: null,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -178,7 +201,19 @@ export async function createBloodUnit(req, res) {
       updated_at: new Date().toISOString(),
     });
     const { data: updated } = await supabase.from('blood_units').update({ status: 'testing', updated_at: new Date().toISOString() }).eq('id', unit.id).select().single();
-    res.status(201).json(updated || unit);
+    const result = updated || unit;
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'blood_unit',
+      resourceId: result.id,
+      patientId: null,
+      after: result,
+      req,
+    });
+    res.status(201).json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -195,6 +230,17 @@ export async function updateBloodUnit(req, res) {
     });
     const { data, error } = await supabase.from('blood_units').update(updates).eq('id', id).select().single();
     if (error) return res.status(500).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'blood_unit',
+      resourceId: id,
+      patientId: null,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -241,6 +287,18 @@ export async function approveUnit(req, res) {
     }).eq('unit_id', id);
     await supabase.from('blood_units').update({ status: 'available', updated_at: new Date().toISOString() }).eq('id', id);
     const { data: updated } = await supabase.from('blood_units').select('*').eq('id', id).single();
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'blood_unit',
+      resourceId: id,
+      patientId: null,
+      after: updated,
+      before: { status: unit.status },
+      req,
+    });
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -270,6 +328,18 @@ export async function rejectUnit(req, res) {
       disposed_by: userId,
     });
     const { data: updated } = await supabase.from('blood_units').select('*').eq('id', id).single();
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'blood_unit',
+      resourceId: id,
+      patientId: null,
+      after: updated,
+      before: { status: unit.status },
+      req,
+    });
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -318,6 +388,17 @@ export async function approveRequest(req, res) {
     }).eq('id', id).eq('request_status', 'pending').select().single();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Request not found or not pending' });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'blood_request',
+      resourceId: id,
+      patientId: data.patient_id,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -336,6 +417,17 @@ export async function rejectRequest(req, res) {
     }).eq('id', id).eq('request_status', 'pending').select().single();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Request not found or not pending' });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'blood_request',
+      resourceId: id,
+      patientId: data.patient_id,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -374,7 +466,20 @@ export async function allocateRequest(req, res) {
     }
     await supabase.from('blood_requests').update({ request_status: 'fulfilled', updated_at: new Date().toISOString() }).eq('id', id);
     const { data: allocations } = await supabase.from('blood_allocations').select('*').eq('request_id', id);
-    res.json({ allocated: availableUnits.length, allocations: allocations || [] });
+    const result = { allocated: availableUnits.length, allocations: allocations || [] };
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'blood_request',
+      resourceId: id,
+      patientId: reqRow.patient_id,
+      after: result,
+      before: { request_status: reqRow.request_status },
+      req,
+    });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -398,6 +503,17 @@ export async function recordTransfusion(req, res) {
     }).select().single();
     if (error) return res.status(500).json({ error: error.message });
     await supabase.from('blood_units').update({ status: 'transfused', updated_at: new Date().toISOString() }).eq('id', unit_id);
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'transfusion_log',
+      resourceId: log.id,
+      patientId: patient_id,
+      after: log,
+      req,
+    });
     res.status(201).json(log);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -436,6 +552,18 @@ export async function disposeUnit(req, res) {
     });
     await supabase.from('blood_units').update({ status: 'disposed', updated_at: new Date().toISOString() }).eq('id', id);
     const { data: updated } = await supabase.from('blood_units').select('*').eq('id', id).single();
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'blood_unit',
+      resourceId: id,
+      patientId: null,
+      after: updated,
+      before: { status: unit.status },
+      req,
+    });
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -519,6 +647,17 @@ export async function createDonationRequest(req, res) {
       .select()
       .single();
     if (error) return res.status(500).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'blood_donation_request',
+      resourceId: data.id,
+      patientId: null,
+      after: data,
+      req,
+    });
     res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -542,6 +681,17 @@ export async function updateDonationRequest(req, res) {
       .single();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Request not found' });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'blood_donation_request',
+      resourceId: id,
+      patientId: null,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -594,6 +744,17 @@ export async function completeVolunteerDonation(req, res) {
       .single();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Pledge not found or already completed' });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'volunteer_donation',
+      resourceId: pledgeId,
+      patientId: null,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });

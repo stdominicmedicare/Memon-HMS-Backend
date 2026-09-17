@@ -10,6 +10,8 @@ import {
   updateAppointmentStatus,
   getRecords,
   createRecord,
+  updateRecord,
+  deleteRecord,
   getPrescriptions,
   createPrescription,
   createEmergencyRequest,
@@ -30,6 +32,8 @@ router.get('/appointments', getAppointments);
 router.patch('/appointments/:id', updateAppointmentStatus);
 router.get('/records', getRecords);
 router.post('/records', createRecord);
+router.patch('/records/:id', updateRecord);
+router.delete('/records/:id', deleteRecord);
 router.get('/prescriptions', getPrescriptions);
 router.post('/prescriptions', createPrescription);
 router.post('/emergency-request', createEmergencyRequest);

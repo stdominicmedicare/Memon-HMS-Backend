@@ -2,6 +2,7 @@
  * Doctor API: patients, appointments (accept/reject), medical records, prescriptions. Scoped to req.user.id (doctor_id).
  */
 import { supabase } from '../config/supabase.js';
+import { writeAuditLog } from '../services/auditService.js';
 
 export async function getPatients(req, res) {
   try {
@@ -84,7 +85,7 @@ export async function getRecords(req, res) {
     const { patient_id } = req.query;
     let q = supabase
       .from('medical_records')
-      .select('id, patient_id, diagnosis, notes, observations, created_at')
+      .select('id, patient_id, diagnosis, notes, observations, created_at, updated_at')
       .eq('doctor_id', doctorId)
       .order('created_at', { ascending: false });
     if (patient_id) q = q.eq('patient_id', patient_id);
@@ -101,6 +102,18 @@ export async function getRecords(req, res) {
       ...r,
       patient: patientMap[r.patient_id] || null,
     }));
+
+    await writeAuditLog({
+      actorId: doctorId,
+      actorEmail: req.user.email,
+      actorRole: req.role,
+      action: 'view',
+      resourceType: 'medical_record',
+      patientId: patient_id || null,
+      metadata: { count: data.length, scoped: 'doctor' },
+      req,
+    });
+
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -128,7 +141,107 @@ export async function createRecord(req, res) {
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
+
+    await writeAuditLog({
+      actorId: doctorId,
+      actorEmail: req.user.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'medical_record',
+      resourceId: data.id,
+      patientId: patient_id,
+      after: data,
+      req,
+    });
+
     res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+export async function updateRecord(req, res) {
+  try {
+    const doctorId = req.user.id;
+    const { id } = req.params;
+    const { diagnosis, notes, observations } = req.body;
+
+    const { data: before, error: findErr } = await supabase
+      .from('medical_records')
+      .select('*')
+      .eq('id', id)
+      .eq('doctor_id', doctorId)
+      .single();
+    if (findErr || !before) return res.status(404).json({ error: 'Record not found' });
+
+    const updates = { updated_at: new Date().toISOString() };
+    if (diagnosis !== undefined) updates.diagnosis = diagnosis;
+    if (notes !== undefined) updates.notes = notes;
+    if (observations !== undefined) updates.observations = observations;
+
+    const { data, error } = await supabase
+      .from('medical_records')
+      .update(updates)
+      .eq('id', id)
+      .eq('doctor_id', doctorId)
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    await writeAuditLog({
+      actorId: doctorId,
+      actorEmail: req.user.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'medical_record',
+      resourceId: id,
+      patientId: before.patient_id,
+      before,
+      after: data,
+      req,
+    });
+
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+export async function deleteRecord(req, res) {
+  try {
+    const doctorId = req.user.id;
+    const { id } = req.params;
+
+    const { data: before, error: findErr } = await supabase
+      .from('medical_records')
+      .select('*')
+      .eq('id', id)
+      .eq('doctor_id', doctorId)
+      .single();
+    if (findErr || !before) return res.status(404).json({ error: 'Record not found' });
+
+    const { error } = await supabase
+      .from('medical_records')
+      .delete()
+      .eq('id', id)
+      .eq('doctor_id', doctorId);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    await writeAuditLog({
+      actorId: doctorId,
+      actorEmail: req.user.email,
+      actorRole: req.role,
+      action: 'delete',
+      resourceType: 'medical_record',
+      resourceId: id,
+      patientId: before.patient_id,
+      before,
+      req,
+    });
+
+    res.status(204).send();
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -193,19 +306,90 @@ export async function createPrescription(req, res) {
   }
 }
 
-/** Stub: log emergency request (e.g. ambulance). ICU use requestIcuAdmission. */
+/** Create ambulance request for a patient (doctor-initiated). ICU uses requestIcuAdmission. */
 export async function createEmergencyRequest(req, res) {
   try {
     const doctorId = req.user.id;
-    const { type } = req.body;
+    const { type, patient_id, from_address, to_address, priority } = req.body || {};
     if (!['icu', 'ambulance'].includes(type)) {
       return res.status(400).json({ error: 'type must be icu or ambulance' });
     }
     if (type === 'icu') {
       return res.status(400).json({ error: 'Use POST /api/doctor/icu-admission-request for ICU admission' });
     }
-    console.log(`[Emergency stub] doctor=${doctorId} type=${type} at ${new Date().toISOString()}`);
-    res.status(201).json({ ok: true, type, message: 'Request logged (stub). Phase 3 will integrate.' });
+    if (!patient_id || !from_address || !to_address) {
+      return res.status(400).json({
+        error: 'patient_id, from_address, and to_address are required for ambulance requests',
+      });
+    }
+
+    const { data: patient } = await supabase
+      .from('profiles')
+      .select('id, role, full_name')
+      .eq('id', patient_id)
+      .eq('role', 'Patient')
+      .single();
+    if (!patient) return res.status(404).json({ error: 'Patient not found' });
+
+    const pr = ['High', 'Medium', 'Low'].includes(priority) ? priority : 'High';
+    const { data, error } = await supabase
+      .from('ambulance_requests')
+      .insert({
+        patient_id,
+        from_address: String(from_address).trim(),
+        to_address: String(to_address).trim(),
+        priority: pr,
+        status: 'pending',
+        notes: `Requested by doctor ${doctorId}`,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      // notes column may not exist on older schemas — retry without it
+      if (String(error.message || '').toLowerCase().includes('notes')) {
+        const retry = await supabase
+          .from('ambulance_requests')
+          .insert({
+            patient_id,
+            from_address: String(from_address).trim(),
+            to_address: String(to_address).trim(),
+            priority: pr,
+            status: 'pending',
+          })
+          .select()
+          .single();
+        if (retry.error) return res.status(400).json({ error: retry.error.message });
+        await writeAuditLog({
+          actorId: doctorId,
+          actorEmail: req.user?.email,
+          actorRole: req.role,
+          action: 'create',
+          resourceType: 'ambulance_request',
+          resourceId: retry.data.id,
+          patientId: patient_id,
+          after: retry.data,
+          metadata: { source: 'doctor_emergency' },
+          req,
+        });
+        return res.status(201).json(retry.data);
+      }
+      return res.status(400).json({ error: error.message });
+    }
+
+    await writeAuditLog({
+      actorId: doctorId,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'ambulance_request',
+      resourceId: data.id,
+      patientId: patient_id,
+      after: data,
+      metadata: { source: 'doctor_emergency' },
+      req,
+    });
+    res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

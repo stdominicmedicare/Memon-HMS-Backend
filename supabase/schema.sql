@@ -3,7 +3,8 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TYPE public.app_role AS ENUM (
   'GeneralUser', 'Patient', 'Doctor', 'Admin', 'Ambulance', 'ICU',
-  'Pharmacy', 'BloodBank', 'Blood Bank', 'Volunteer'
+  'Pharmacy', 'BloodBank', 'Blood Bank', 'Volunteer',
+  'Nurse', 'Receptionist', 'RecordsOfficer'
 );
 CREATE TYPE public.doctor_status AS ENUM ('Available', 'On Leave', 'Busy', 'Inactive');
 CREATE TYPE public.appointment_status AS ENUM ('pending', 'confirmed', 'cancelled', 'completed');
@@ -32,11 +33,26 @@ CREATE TYPE public.blood_urgency AS ENUM ('routine', 'urgent', 'emergency');
 CREATE TYPE public.donation_request_status AS ENUM ('open', 'closed');
 CREATE TYPE public.volunteer_donation_status AS ENUM ('pending', 'completed');
 
+CREATE SEQUENCE IF NOT EXISTS public.mrn_seq START WITH 1 INCREMENT BY 1;
+
+CREATE OR REPLACE FUNCTION public.next_mrn()
+RETURNS text
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN 'MRN-' || to_char(timezone('utc', now()), 'YYYY') || '-' ||
+    lpad(nextval('public.mrn_seq')::text, 6, '0');
+END;
+$$;
+
 CREATE TABLE public.profiles (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email text,
   full_name text,
   phone text,
+  mrn text,
+  date_of_birth date,
+  merged_into_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
   role public.app_role NOT NULL DEFAULT 'Patient',
   is_active boolean NOT NULL DEFAULT true,
   specialty text,
@@ -46,11 +62,38 @@ CREATE TABLE public.profiles (
   consultation_fee text,
   schedule text,
   doctor_status public.doctor_status,
+  password_changed_at timestamptz NOT NULL DEFAULT now(),
+  data_consent boolean NOT NULL DEFAULT false,
+  data_consent_at timestamptz,
+  data_consent_method text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX profiles_role_idx ON public.profiles (role);
 CREATE INDEX profiles_is_active_idx ON public.profiles (is_active);
+CREATE UNIQUE INDEX profiles_mrn_uidx ON public.profiles (mrn) WHERE mrn IS NOT NULL;
+CREATE INDEX profiles_full_name_idx ON public.profiles (full_name);
+CREATE INDEX profiles_phone_idx ON public.profiles (phone);
+CREATE INDEX profiles_dob_idx ON public.profiles (date_of_birth);
+
+CREATE OR REPLACE FUNCTION public.assign_patient_mrn()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.role = 'Patient' AND (NEW.mrn IS NULL OR NEW.mrn = '') THEN
+    NEW.mrn := public.next_mrn();
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER profiles_assign_mrn
+  BEFORE INSERT OR UPDATE OF role ON public.profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION public.assign_patient_mrn();
 
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
@@ -61,31 +104,73 @@ AS $$
 DECLARE
   meta_role text;
   resolved_role public.app_role;
+  meta_phone text;
+  meta_dob date;
+  meta_consent boolean := false;
+  meta_consent_at timestamptz := NULL;
+  meta_consent_method text := NULL;
 BEGIN
   meta_role := COALESCE(NEW.raw_user_meta_data->>'role', '');
   IF meta_role = '' THEN
     resolved_role := 'Patient';
   ELSIF meta_role IN (
     'GeneralUser','Patient','Doctor','Admin','Ambulance','ICU',
-    'Pharmacy','BloodBank','Blood Bank','Volunteer'
+    'Pharmacy','BloodBank','Blood Bank','Volunteer',
+    'Nurse','Receptionist','RecordsOfficer'
   ) THEN
     resolved_role := meta_role::public.app_role;
   ELSE
     resolved_role := 'Patient';
   END IF;
 
-  INSERT INTO public.profiles (id, email, full_name, role, is_active)
+  meta_phone := NULLIF(trim(COALESCE(NEW.raw_user_meta_data->>'phone', '')), '');
+  BEGIN
+    IF COALESCE(NEW.raw_user_meta_data->>'date_of_birth', '') <> '' THEN
+      meta_dob := (NEW.raw_user_meta_data->>'date_of_birth')::date;
+    END IF;
+  EXCEPTION WHEN others THEN
+    meta_dob := NULL;
+  END;
+
+  IF lower(COALESCE(NEW.raw_user_meta_data->>'data_consent', '')) IN ('true', '1', 'yes') THEN
+    meta_consent := true;
+    meta_consent_at := now();
+    meta_consent_method := COALESCE(
+      NULLIF(trim(NEW.raw_user_meta_data->>'data_consent_method'), ''),
+      'self_signup'
+    );
+  END IF;
+
+  INSERT INTO public.profiles (
+    id, email, full_name, phone, date_of_birth, role, is_active,
+    data_consent, data_consent_at, data_consent_method
+  )
   VALUES (
     NEW.id,
     NEW.email,
     COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email),
+    meta_phone,
+    meta_dob,
     resolved_role,
-    true
+    true,
+    meta_consent,
+    meta_consent_at,
+    meta_consent_method
   )
   ON CONFLICT (id) DO NOTHING;
   RETURN NEW;
 END;
 $$;
+
+CREATE TABLE public.departments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL UNIQUE,
+  code text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX departments_is_active_idx ON public.departments (is_active);
 
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
@@ -126,6 +211,7 @@ CREATE TABLE public.medical_records (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX medical_records_patient_idx ON public.medical_records (patient_id);
 
 CREATE TABLE public.prescriptions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -143,6 +229,7 @@ CREATE TABLE public.prescriptions (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX prescriptions_patient_idx ON public.prescriptions (patient_id);
 
 CREATE TABLE public.medicines (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -414,28 +501,67 @@ CREATE TABLE public.volunteer_donations (
   UNIQUE (volunteer_id, donation_request_id)
 );
 
+-- Append-only PHI audit log
+CREATE TABLE public.audit_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+  actor_email text,
+  actor_role text,
+  action text NOT NULL CHECK (action IN ('view', 'create', 'edit', 'delete')),
+  resource_type text NOT NULL DEFAULT 'medical_record',
+  resource_id uuid,
+  patient_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+  before_data jsonb,
+  after_data jsonb,
+  metadata jsonb DEFAULT '{}'::jsonb,
+  ip_address text,
+  user_agent text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX audit_logs_patient_idx ON public.audit_logs (patient_id);
+CREATE INDEX audit_logs_actor_idx ON public.audit_logs (actor_id);
+CREATE INDEX audit_logs_created_idx ON public.audit_logs (created_at DESC);
+
+CREATE OR REPLACE FUNCTION public.audit_logs_immutable()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION 'audit_logs are append-only and cannot be modified or deleted';
+END;
+$$;
+
+CREATE TRIGGER audit_logs_no_update
+  BEFORE UPDATE OR DELETE ON public.audit_logs
+  FOR EACH ROW EXECUTE PROCEDURE public.audit_logs_immutable();
+
+-- RLS: deny-by-default for PostgREST clients (anon / authenticated).
+-- All app data access goes through the Express API using the service_role key,
+-- which bypasses RLS. Do NOT add USING (true) policies for authenticated.
+-- Enable RLS on every ordinary public table (covers future tables in this file too).
 DO $$
 DECLARE
-  t text;
+  r record;
 BEGIN
-  FOREACH t IN ARRAY ARRAY[
-    'profiles','volunteer_profiles','appointments','medical_records','prescriptions',
-    'prescription_items','medicines','dispense_records','purchase_orders','purchase_order_items',
-    'ambulances','ambulance_requests','ambulance_trip_locations',
-    'icu_beds','icu_admission_requests','icu_admission_records','icu_patient_monitoring',
-    'donors','blood_units','blood_testing','blood_requests','blood_allocations',
-    'transfusion_logs','disposal_logs','blood_donation_requests','volunteer_donations'
-  ]
+  FOR r IN
+    SELECT c.relname AS tablename
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind = 'r'
   LOOP
-    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
-    EXECUTE format(
-      'CREATE POLICY %I ON public.%I FOR ALL TO authenticated USING (true) WITH CHECK (true)',
-      t || '_authenticated_all', t
-    );
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', r.tablename);
   END LOOP;
 END $$;
 
-GRANT USAGE ON SCHEMA public TO anon, authenticated;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated, service_role;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
+
+-- Explicitly deny table/sequence access from browser JWT roles (defense in depth).
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO service_role;
