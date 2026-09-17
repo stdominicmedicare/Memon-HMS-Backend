@@ -22,6 +22,8 @@ import {
   getVolunteers,
   createVolunteer,
   updateVolunteer,
+  getDepartments,
+  createDepartment,
 } from '../controllers/admin.controller.js';
 import {
   getAmbulances,
@@ -40,10 +42,15 @@ import {
   deleteIcuBed,
   getIcuAnalytics,
 } from '../controllers/admin.icu.controller.js';
+import { getAuditLogs } from '../controllers/audit.controller.js';
 
 const router = Router();
 
 router.use(authMiddleware);
+
+/** Audit trail: Admin + RecordsOfficer */
+router.get('/audit-logs', requireRole('Admin', 'RecordsOfficer'), getAuditLogs);
+
 router.use(requireRole('Admin'));
 
 router.get('/dashboard', getDashboardStats);
@@ -80,5 +87,8 @@ router.get('/icu-analytics', getIcuAnalytics);
 router.get('/volunteers', getVolunteers);
 router.post('/volunteers', createVolunteer);
 router.patch('/volunteers/:id', updateVolunteer);
+
+router.get('/departments', getDepartments);
+router.post('/departments', createDepartment);
 
 export default router;

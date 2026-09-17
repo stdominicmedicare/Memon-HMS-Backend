@@ -3,6 +3,7 @@
  * All operations scoped to req.user.id (driver = Ambulance role).
  */
 import { supabase } from '../config/supabase.js';
+import { writeAuditLog } from '../services/auditService.js';
 
 const DRIVER_FLEET_DEPOT = { lat: 40.7128, lng: -74.006 };
 const ACTIVE_TRIP_STATUSES = ['en_route', 'arrived', 'patient_picked', 'arrived_at_hospital'];
@@ -215,6 +216,17 @@ export async function updateStatus(req, res) {
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'ambulance',
+      resourceId: ambulance.id,
+      patientId: null,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -263,6 +275,18 @@ export async function acceptTrip(req, res) {
       .update({ status: 'On Duty', updated_at: new Date().toISOString() })
       .eq('id', ambulance.id);
 
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'ambulance_request',
+      resourceId: id,
+      patientId: data.patient_id || null,
+      after: data,
+      before: { status: request.status },
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -308,6 +332,18 @@ export async function rejectTrip(req, res) {
         .eq('id', request.ambulance_id);
     }
 
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'ambulance_request',
+      resourceId: id,
+      patientId: data.patient_id || null,
+      after: data,
+      before: { status: request.status, assigned_driver_id: request.assigned_driver_id },
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -338,6 +374,18 @@ export async function startTrip(req, res) {
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'ambulance_request',
+      resourceId: id,
+      patientId: data.patient_id || null,
+      after: data,
+      before: { status: request.status },
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -368,6 +416,18 @@ export async function arrivedTrip(req, res) {
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'ambulance_request',
+      resourceId: id,
+      patientId: data.patient_id || null,
+      after: data,
+      before: { status: request.status },
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -398,6 +458,18 @@ export async function patientPickedTrip(req, res) {
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'ambulance_request',
+      resourceId: id,
+      patientId: data.patient_id || null,
+      after: data,
+      before: { status: request.status },
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -428,6 +500,18 @@ export async function arrivedAtHospitalTrip(req, res) {
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'ambulance_request',
+      resourceId: id,
+      patientId: data.patient_id || null,
+      after: data,
+      before: { status: request.status },
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -470,6 +554,18 @@ export async function completeTrip(req, res) {
         .eq('id', request.ambulance_id);
     }
 
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'ambulance_request',
+      resourceId: id,
+      patientId: data.patient_id || null,
+      after: data,
+      before: { status: request.status },
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });

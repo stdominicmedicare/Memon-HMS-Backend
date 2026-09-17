@@ -1,1 +1,2 @@
-# Auth middleware, RBAC, audit logging, error handler
+# Auth middleware, RBAC, error handler (implemented in *.js files).
+# Audit logging lives in src/services/auditService.js

@@ -3,6 +3,7 @@
  * All operations scoped to ICU role; doctor creates admission requests.
  */
 import { supabase } from '../config/supabase.js';
+import { writeAuditLog } from '../services/auditService.js';
 
 /** Get ICU dashboard: beds, stats, pending admission requests, critical alerts. */
 export async function getDashboard(req, res) {
@@ -112,6 +113,17 @@ export async function updateBedStatus(req, res) {
 
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Bed not found' });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'icu_bed',
+      resourceId: id,
+      patientId: data.current_patient_id || null,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -221,6 +233,18 @@ export async function approveRequest(req, res) {
         .eq('id', assigned_bed_id);
     }
 
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'icu_admission_request',
+      resourceId: id,
+      patientId: reqRow.patient_id,
+      after: updated,
+      before: { request_status: reqRow.request_status },
+      req,
+    });
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -248,6 +272,17 @@ export async function rejectRequest(req, res) {
 
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Request not found or already processed' });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'icu_admission_request',
+      resourceId: id,
+      patientId: data.patient_id,
+      after: data,
+      req,
+    });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -303,6 +338,17 @@ export async function assignBed(req, res) {
       .select()
       .single();
 
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'icu_admission_request',
+      resourceId: id,
+      patientId: reqRow.patient_id,
+      after: updated || { ok: true, assigned_bed_id },
+      req,
+    });
     res.json(updated || { ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -445,6 +491,17 @@ export async function addMonitoringLog(req, res) {
 
     const { data, error } = await supabase.from('icu_patient_monitoring').insert(payload).select().single();
     if (error) return res.status(500).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'icu_patient_monitoring',
+      resourceId: data.id,
+      patientId: patient_id,
+      after: data,
+      req,
+    });
     res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -487,6 +544,18 @@ export async function dischargePatient(req, res) {
       })
       .eq('id', record.bed_id);
 
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'icu_admission_record',
+      resourceId: id,
+      patientId: record.patient_id,
+      after: { ok: true, discharge_time: now, discharge_reason, final_status },
+      before: record,
+      req,
+    });
     res.json({ ok: true, discharge_time: now });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -517,6 +586,18 @@ export async function transferBed(req, res) {
     await supabase.from('icu_beds').update({ status: 'occupied', current_patient_id: record.patient_id, admission_id: id, updated_at: now }).eq('id', new_bed_id);
     const { error: updateRecErr } = await supabase.from('icu_admission_records').update({ bed_id: new_bed_id, updated_at: now }).eq('id', id);
     if (updateRecErr) return res.status(500).json({ error: updateRecErr.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'edit',
+      resourceType: 'icu_admission_record',
+      resourceId: id,
+      patientId: record.patient_id,
+      after: { ok: true, new_bed_id },
+      before: { bed_id: record.bed_id },
+      req,
+    });
     res.json({ ok: true, new_bed_id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -544,6 +625,17 @@ export async function requestAmbulanceTransfer(req, res) {
       .select()
       .single();
     if (error) return res.status(500).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'ambulance_request',
+      resourceId: data.id,
+      patientId: patient_id,
+      after: data,
+      req,
+    });
     res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -610,6 +702,17 @@ export async function createBloodRequest(req, res) {
       .select()
       .single();
     if (error) return res.status(500).json({ error: error.message });
+    await writeAuditLog({
+      actorId: req.user?.id,
+      actorEmail: req.user?.email,
+      actorRole: req.role,
+      action: 'create',
+      resourceType: 'blood_request',
+      resourceId: data.id,
+      patientId: patient_id,
+      after: data,
+      req,
+    });
     res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -4,26 +4,74 @@
  * Users enter system: (1) Patients self-signup; (2) Staff created by Admin only.
  */
 import { supabase } from '../config/supabase.js';
+import { validatePassword } from '../utils/passwordPolicy.js';
 
-const PROFILES_SELECT = 'id, email, full_name, phone, role, is_active, created_at';
+const PROFILES_SELECT = 'id, email, full_name, phone, mrn, date_of_birth, role, is_active, created_at, password_changed_at';
 const DOCTORS_SELECT = 'id, email, full_name, phone, role, is_active, specialty, department, license_number, years_experience, consultation_fee, schedule, doctor_status, created_at, updated_at';
 const DOCTOR_STATUSES = ['Available', 'On Leave', 'Busy', 'Inactive'];
 
+/** Ban ~100 years so deactivated staff cannot use existing JWTs. */
+const DEACTIVATE_BAN = '876000h';
+
+/** Ensure department name exists in the configurable departments catalog. */
+async function ensureDepartment(name) {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return;
+  const { error } = await supabase.from('departments').upsert(
+    { name: trimmed, updated_at: new Date().toISOString() },
+    { onConflict: 'name', ignoreDuplicates: false }
+  );
+  if (error) console.error('[admin] department upsert failed:', error.message);
+}
+
+async function setAuthBan(userId, deactivated) {
+  const { error } = await supabase.auth.admin.updateUserById(userId, {
+    ban_duration: deactivated ? DEACTIVATE_BAN : 'none',
+  });
+  if (error) console.error('[admin] ban update failed:', error.message);
+  try {
+    await supabase.auth.admin.signOut(userId, 'global');
+  } catch {
+    /* older supabase-js may not support signOut(userId) */
+  }
+}
+
 export async function createUser(req, res) {
   try {
-    const { email, password, full_name, role } = req.body;
+    const { email, password, full_name, role, phone, date_of_birth } = req.body;
     if (!email || !password || !role) {
       return res.status(400).json({ error: 'Email, password, and role are required' });
     }
+    const check = validatePassword(password);
+    if (!check.ok) return res.status(400).json({ error: check.error });
+
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
-      user_metadata: { full_name: full_name || email, role },
+      user_metadata: {
+        full_name: full_name || email,
+        role,
+        phone: phone || null,
+        date_of_birth: date_of_birth || null,
+      },
     });
     if (authError) {
       return res.status(400).json({ error: authError.message });
     }
+    const now = new Date().toISOString();
+    await supabase
+      .from('profiles')
+      .update({
+        role,
+        full_name: full_name || email,
+        phone: phone || null,
+        date_of_birth: date_of_birth || null,
+        password_changed_at: now,
+        updated_at: now,
+      })
+      .eq('id', authData.user.id);
+
     const { data: profile } = await supabase
       .from('profiles')
       .select(PROFILES_SELECT)
@@ -102,6 +150,11 @@ export async function updateUser(req, res) {
     if (error) {
       return res.status(500).json({ error: error.message });
     }
+
+    if (typeof is_active === 'boolean') {
+      await setAuthBan(id, !is_active);
+    }
+
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -125,13 +178,18 @@ export async function resetPassword(req, res) {
   try {
     const { id } = req.params;
     const { password } = req.body;
-    if (!password || password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters' });
-    }
+    const check = validatePassword(password);
+    if (!check.ok) return res.status(400).json({ error: check.error });
+
     const { error } = await supabase.auth.admin.updateUserById(id, { password });
     if (error) {
       return res.status(400).json({ error: error.message });
     }
+    const now = new Date().toISOString();
+    await supabase
+      .from('profiles')
+      .update({ password_changed_at: now, updated_at: now })
+      .eq('id', id);
     res.json({ message: 'Password updated' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -208,9 +266,11 @@ export async function createDoctor(req, res) {
         error: 'Email, password, full_name, specialty, department, and license_number are required',
       });
     }
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters' });
-    }
+    const check = validatePassword(password);
+    if (!check.ok) return res.status(400).json({ error: check.error });
+
+    await ensureDepartment(department);
+
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email,
       password,
@@ -230,6 +290,7 @@ export async function createDoctor(req, res) {
       consultation_fee: consultation_fee != null ? String(consultation_fee) : null,
       schedule: schedule != null && String(schedule).trim() ? String(schedule).trim() : null,
       doctor_status: doctor_status && DOCTOR_STATUSES.includes(doctor_status) ? doctor_status : 'Available',
+      password_changed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
@@ -288,7 +349,10 @@ export async function updateDoctor(req, res) {
     if (full_name !== undefined) updates.full_name = full_name;
     if (phone !== undefined) updates.phone = phone;
     if (specialty !== undefined) updates.specialty = specialty;
-    if (department !== undefined) updates.department = department;
+    if (department !== undefined) {
+      updates.department = department;
+      if (department) await ensureDepartment(department);
+    }
     if (license_number !== undefined) updates.license_number = license_number;
     if (years_experience !== undefined) updates.years_experience = years_experience == null ? null : Number(years_experience);
     if (consultation_fee !== undefined) updates.consultation_fee = consultation_fee == null ? null : String(consultation_fee);
@@ -304,6 +368,9 @@ export async function updateDoctor(req, res) {
       .single();
 
     if (error) return res.status(500).json({ error: error.message });
+    if (typeof is_active === 'boolean') {
+      await setAuthBan(id, !is_active);
+    }
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -462,9 +529,9 @@ export async function createVolunteer(req, res) {
     if (!BLOOD_GROUPS.includes(blood_group)) {
       return res.status(400).json({ error: 'Invalid blood_group' });
     }
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters' });
-    }
+    const check = validatePassword(password);
+    if (!check.ok) return res.status(400).json({ error: check.error });
+
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email,
       password,
@@ -479,6 +546,7 @@ export async function createVolunteer(req, res) {
         full_name: full_name || email,
         phone: phone != null ? String(phone).trim() : null,
         role: 'Volunteer',
+        password_changed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
       .eq('id', authData.user.id);
@@ -528,6 +596,9 @@ export async function updateVolunteer(req, res) {
     if (Object.keys(profileUpdates).length > 1) {
       await supabase.from('profiles').update(profileUpdates).eq('id', id);
     }
+    if (typeof is_active === 'boolean') {
+      await setAuthBan(id, !is_active);
+    }
 
     if (blood_group !== undefined) {
       if (!BLOOD_GROUPS.includes(blood_group)) return res.status(400).json({ error: 'Invalid blood_group' });
@@ -553,6 +624,68 @@ export async function updateVolunteer(req, res) {
     const { data: profile } = await supabase.from('profiles').select('id, email, full_name, phone, role, is_active').eq('id', id).single();
     const { data: vp } = await supabase.from('volunteer_profiles').select('blood_group, is_available').eq('user_id', id).maybeSingle();
     res.json({ ...profile, blood_group: vp?.blood_group ?? null, is_available: vp?.is_available ?? false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/** List active departments (extensible catalog — no redeploy needed to add names). */
+export async function getDepartments(req, res) {
+  try {
+    const includeInactive = String(req.query.all || '') === '1';
+    let query = supabase
+      .from('departments')
+      .select('id, name, code, is_active, created_at, updated_at')
+      .order('name', { ascending: true });
+    if (!includeInactive) query = query.eq('is_active', true);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+/** Create or reactivate a department name without schema/code changes. */
+export async function createDepartment(req, res) {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const code = req.body?.code != null ? String(req.body.code).trim() || null : null;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const { data: existing } = await supabase
+      .from('departments')
+      .select('id, name, code, is_active')
+      .eq('name', name)
+      .maybeSingle();
+
+    if (existing) {
+      const { data, error } = await supabase
+        .from('departments')
+        .update({
+          is_active: true,
+          code: code ?? existing.code,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existing.id)
+        .select()
+        .single();
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json(data);
+    }
+
+    const { data, error } = await supabase
+      .from('departments')
+      .insert({
+        name,
+        code,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -2,6 +2,7 @@
  * Patient API: appointments, records, prescriptions. All scoped to req.user.id (patient_id).
  */
 import { supabase } from '../config/supabase.js';
+import { writeAuditLog } from '../services/auditService.js';
 
 export async function getDoctors(req, res) {
   try {
@@ -91,6 +92,18 @@ export async function getRecords(req, res) {
       ...r,
       doctor: doctorMap[r.doctor_id] || null,
     }));
+
+    await writeAuditLog({
+      actorId: patientId,
+      actorEmail: req.user.email,
+      actorRole: req.role,
+      action: 'view',
+      resourceType: 'medical_record',
+      patientId,
+      metadata: { count: data.length, scoped: 'patient_self' },
+      req,
+    });
+
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });

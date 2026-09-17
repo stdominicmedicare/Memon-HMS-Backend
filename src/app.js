@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { apiLimiter, authLimiter } from './middleware/rateLimit.js';
 
 const app = express();
 
@@ -28,7 +29,7 @@ if (process.env.NODE_ENV !== 'test') {
 }
 app.use(express.json());
 
-// Health / API root
+// Health / API root (not rate-limited)
 app.get('/', (req, res) => {
   res.json({
     message: 'MEMON COMMUNITY HOSPITAL API',
@@ -52,8 +53,11 @@ import bloodbankRoutes from './routes/bloodbank.routes.js';
 import volunteerRoutes from './routes/volunteer.routes.js';
 import geoRoutes from './routes/geo.routes.js';
 import trackingRoutes from './routes/tracking.routes.js';
+import recordsRoutes from './routes/records.routes.js';
+import reportRoutes from './routes/report.routes.js';
 
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api', apiLimiter);
 app.use('/api/admin', adminRoutes);
 app.use('/api/patient', patientRoutes);
 app.use('/api/doctor', doctorRoutes);
@@ -64,5 +68,7 @@ app.use('/api/bloodbank', bloodbankRoutes);
 app.use('/api/volunteer', volunteerRoutes);
 app.use('/api', geoRoutes);
 app.use('/api/tracking', trackingRoutes);
+app.use('/api/records', recordsRoutes);
+app.use('/api/reports', reportRoutes);
 
 export default app;
